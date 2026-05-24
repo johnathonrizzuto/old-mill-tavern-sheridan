@@ -741,9 +741,21 @@ reveals.forEach(r => io.observe(r));
 </script>
 
 <!-- ===========================================================================
-     Visual Editor for Johnathon Builds sites -- v3.2 (2026-05-23)
+     Visual Editor for Johnathon Builds sites -- v3.3 (2026-05-24)
      Injected before </body> by inject-editor.ps1 or baked in during Stage 1.
      Activates ONLY when the URL contains ?edit=jb2026. Otherwise fully inert.
+
+     v3.3 changes (over v3.2):
+       - Hidden elements (data-jb-hidden) now actually hide in edit mode
+         instead of showing an orange "(hidden -- click trash to restore)"
+         badge over them. The dashed outline + opacity preview is gone.
+         To restore a hidden section, use the Sections drawer (the eye/X
+         toggle still lists every hidden section by heading).
+       - BG MODE popover gained a "Apply to all N matching backgrounds"
+         checkbox. When you click a band and pick a new color, you can
+         apply the change to every element on the page that currently
+         shares that exact background-color -- fixes mismatched section
+         bands in one shot instead of one-by-one.
 
      v3.2 additions (over v3.1):
        - BG MODE: new "BG" toolbar button enters a click-to-recolor-background
@@ -886,8 +898,7 @@ reveals.forEach(r => io.observe(r));
     '.jb-del-btn { position: absolute; top: 4px; right: 4px; z-index: 99000; width: 26px; height: 26px; border-radius: 50%; background: #ef4444; color: white; border: 2px solid white; font-size: 14px; font-weight: 700; line-height: 1; cursor: pointer; box-shadow: 0 2px 8px rgba(0,0,0,0.3); display: none; align-items: center; justify-content: center; padding: 0; transition: transform 0.15s; }',
     '.jb-del-btn:hover { transform: scale(1.15); }',
     '[data-jb-deletable]:hover > .jb-del-btn { display: inline-flex; }',
-    '[data-jb-hidden] { opacity: 0.35; outline: 2px dashed #f59e0b; outline-offset: 2px; }',
-    '[data-jb-hidden]::after { content: "(hidden -- click trash to restore)"; position: absolute; top: 8px; left: 8px; background: #f59e0b; color: #0a0e1a; padding: 2px 8px; font-size: 11px; font-weight: 700; border-radius: 4px; z-index: 99000; }',
+    '[data-jb-hidden] { display: none !important; }',
     /* Modal */
     '#jb-modal { position: fixed; inset: 0; background: rgba(0,0,0,0.7); z-index: 99998; display: flex; align-items: center; justify-content: center; padding: 16px; backdrop-filter: blur(6px); }',
     '#jb-modal .jb-modal-card { background: #0f1320; border: 1px solid #2a3358; border-radius: 12px; padding: 20px; max-width: 500px; width: 100%; color: #e7eaf6; font-family: -apple-system, sans-serif; max-height: 80vh; overflow-y: auto; }',
@@ -1100,12 +1111,27 @@ reveals.forEach(r => io.observe(r));
   function closeBgPopover() {
     if (bgPopover) { try { bgPopover.parentNode.removeChild(bgPopover); } catch (e) {} bgPopover = null; }
   }
+  function findAllWithSameBg(targetRgb) {
+    // Find every block-level element on the page whose computed background-color
+    // matches targetRgb. Used by BG mode's "Apply to all matching" checkbox so the
+    // user can fix several mismatched bands with one color change.
+    var matches = [];
+    var sel = 'section, header, footer, main, article, aside, nav, div';
+    document.querySelectorAll(sel).forEach(function (el) {
+      if (el.closest && el.closest('#jb-toolbar, #jb-modal, #jb-toast, .jb-drawer, #jb-elem-panel, #jb-bg-popover, #jb-bg-banner')) return;
+      var bg = getComputedStyle(el).backgroundColor;
+      if (bg === targetRgb) matches.push(el);
+    });
+    return matches;
+  }
   function openBgPopover(targetEl, x, y) {
     closeBgPopover();
     var cs = getComputedStyle(targetEl);
     var currentRgb = cs.backgroundColor;
     var currentHex = rgbToHex(currentRgb);
     var hasGrad = cs.backgroundImage && cs.backgroundImage !== 'none';
+    var matchingEls = findAllWithSameBg(currentRgb);
+    var matchCount = matchingEls.length;
 
     bgPopover = document.createElement('div');
     bgPopover.id = 'jb-bg-popover';
@@ -1116,6 +1142,7 @@ reveals.forEach(r => io.observe(r));
       '  <input type="color" id="jb-bg-color" value="' + currentHex + '" />',
       '  <input type="text" id="jb-bg-hex" value="' + currentHex + '" />',
       '</div>',
+      (matchCount > 1 ? '<label style="display:flex;align-items:center;gap:6px;font-size:11px;color:#fbbf24;margin-top:8px;cursor:pointer"><input type="checkbox" id="jb-bg-matchall" /> Apply to all ' + matchCount + ' matching backgrounds</label>' : ''),
       (hasGrad ? '<label style="display:flex;align-items:center;gap:6px;font-size:11px;color:#94a3b8;margin-top:6px"><input type="checkbox" id="jb-bg-killgrad" checked /> Remove the existing gradient</label>' : ''),
       '<div class="jb-bg-pop-actions">',
       '  <button id="jb-bg-clear">Clear override</button>',
@@ -1134,29 +1161,40 @@ reveals.forEach(r => io.observe(r));
     var colorIn = document.getElementById('jb-bg-color');
     var hexIn = document.getElementById('jb-bg-hex');
     var killGrad = document.getElementById('jb-bg-killgrad');
+    var matchAll = document.getElementById('jb-bg-matchall');
+    function targetsToUpdate() {
+      return (matchAll && matchAll.checked) ? matchingEls : [targetEl];
+    }
+    function applyColor(newColor) {
+      targetsToUpdate().forEach(function (el) {
+        el.style.backgroundColor = newColor;
+        if (killGrad && killGrad.checked) el.style.backgroundImage = 'none';
+      });
+    }
     colorIn.addEventListener('input', function () {
       hexIn.value = colorIn.value;
-      targetEl.style.backgroundColor = colorIn.value;
-      if (killGrad && killGrad.checked) targetEl.style.backgroundImage = 'none';
+      applyColor(colorIn.value);
     });
     hexIn.addEventListener('change', function () {
       var v = hexIn.value.trim();
       if (/^#[0-9a-fA-F]{3,8}$/.test(v)) {
-        targetEl.style.backgroundColor = v;
+        applyColor(v);
         colorIn.value = v.length === 7 ? v : colorIn.value;
-        if (killGrad && killGrad.checked) targetEl.style.backgroundImage = 'none';
       }
     });
     document.getElementById('jb-bg-clear').onclick = function () {
-      targetEl.style.backgroundColor = '';
-      targetEl.style.backgroundImage = '';
+      targetsToUpdate().forEach(function (el) {
+        el.style.backgroundColor = '';
+        el.style.backgroundImage = '';
+      });
       closeBgPopover();
       status('background override cleared -- press Save');
     };
     document.getElementById('jb-bg-cancel').onclick = closeBgPopover;
     document.getElementById('jb-bg-apply').onclick = function () {
+      var n = targetsToUpdate().length;
       closeBgPopover();
-      toast('Background updated. Press Save to push it live.');
+      toast(n > 1 ? ('Updated ' + n + ' backgrounds. Press Save to push live.') : 'Background updated. Press Save to push it live.');
       status('background changed -- press Save');
     };
   }
@@ -2168,7 +2206,7 @@ reveals.forEach(r => io.observe(r));
       '  <p><strong>Edit text:</strong> click any heading, paragraph, link, or list item. Type. Click away.</p>',
       '  <p><strong>Per-element styling:</strong> click any text element to open a panel with font / size / weight / spacing / color / align controls for JUST that element.</p>',
       '  <p><strong>Drop a logo:</strong> click <em>Logo</em> in toolbar. Drop the company\'s logo file -- the site adopts its colors and the logo gets placed in header + footer with its background visually dropped so it flows with the page (never a foreign sticker).</p>',
-      '  <p><strong>BG mode (new):</strong> click <em>BG</em> in toolbar to enter background-picker mode. Hover any colored area to see a yellow outline, click to open a color picker just for that band. Press Esc to exit. Lets you fix the orange/brown/cream bands separately instead of touching every site var at once.</p>',
+      '  <p><strong>BG mode:</strong> click <em>BG</em> in toolbar to enter background-picker mode. Hover any colored area to see a yellow outline, click to open a color picker just for that band. Tick <em>"Apply to all N matching backgrounds"</em> in the popover to fix every mismatched band with the same starting color in one shot. Press Esc to exit.</p>',
       '  <p><strong>Swap image:</strong> click any image. Big "Tap to pick a photo" opens your camera roll on phone, or paste a URL via the small toggle below.</p>',
       '  <p><strong>Delete/hide:</strong> hover any card, section, or element. Click the red X to hide it. Click X again to restore.</p>',
       '  <p><strong>Style drawer:</strong> click <em>Style</em>. Adjust every site color, pick a whole-site font pairing, OR use the <em>Numbers font</em> picker to fix ugly stat displays without touching the rest.</p>',
