@@ -741,9 +741,18 @@ reveals.forEach(r => io.observe(r));
 </script>
 
 <!-- ===========================================================================
-     Visual Editor for Johnathon Builds sites -- v3.1 (2026-05-23)
+     Visual Editor for Johnathon Builds sites -- v3.2 (2026-05-23)
      Injected before </body> by inject-editor.ps1 or baked in during Stage 1.
      Activates ONLY when the URL contains ?edit=jb2026. Otherwise fully inert.
+
+     v3.2 additions (over v3.1):
+       - BG MODE: new "BG" toolbar button enters a click-to-recolor-background
+         mode. Cursor becomes crosshair, hover outlines the bg target, click
+         opens a color picker popover that targets just that section's
+         background. Walks UP the DOM to find the nearest ancestor with a
+         non-transparent bg, so clicking a paragraph inside a colored band
+         recolors the BAND, not the paragraph. Optional checkbox auto-removes
+         the existing gradient if any. Esc exits.
 
      v3.1 additions (over v3):
        - DROP-LOGO-TO-REBRAND: new "Logo" toolbar button opens a drop area.
@@ -930,6 +939,21 @@ reveals.forEach(r => io.observe(r));
     '#jb-elem-panel .jb-elem-reset { width: 100%; background: transparent; border: 1px solid #475569; color: #94a3b8; padding: 6px; font-size: 11px; border-radius: 4px; cursor: pointer; margin-top: 8px; }',
     '#jb-elem-panel .jb-elem-reset:hover { background: #1e293b; color: #e7eaf6; }',
     '@media (max-width: 640px) { #jb-elem-panel { left: 8px; right: 8px; bottom: 8px; width: auto; max-height: 55vh; } }',
+    /* Background picker mode -- crosshair cursor + hover outline on bg targets */
+    'body.jb-bg-mode * { cursor: crosshair !important; }',
+    'body.jb-bg-mode [data-jb-bg-hover] { outline: 3px solid #fbbf24 !important; outline-offset: -3px; box-shadow: inset 0 0 0 1px rgba(0,0,0,0.6) !important; }',
+    '#jb-bg-popover { position: absolute; z-index: 99700; background: #0f1320; border: 1px solid #2a3358; border-radius: 10px; padding: 14px; box-shadow: -8px 12px 30px rgba(0,0,0,0.45); color: #e7eaf6; font-family: -apple-system, sans-serif; font-size: 12px; min-width: 240px; }',
+    '#jb-bg-popover .jb-bg-pop-head { font-size: 11px; font-weight: 700; color: #fbbf24; text-transform: uppercase; letter-spacing: 0.10em; margin-bottom: 8px; }',
+    '#jb-bg-popover .jb-bg-pop-tag { font-size: 11px; color: #94a3b8; font-family: monospace; margin-bottom: 10px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }',
+    '#jb-bg-popover .jb-bg-pop-row { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }',
+    '#jb-bg-popover input[type=color] { width: 40px; height: 32px; padding: 0; border: 1px solid #475569; border-radius: 4px; cursor: pointer; background: transparent; }',
+    '#jb-bg-popover input[type=text] { flex: 1; min-width: 0; background: #07090f; border: 1px solid #475569; border-radius: 4px; color: #e7eaf6; font-size: 12px; padding: 6px; font-family: monospace; }',
+    '#jb-bg-popover .jb-bg-pop-actions { display: flex; gap: 6px; margin-top: 10px; }',
+    '#jb-bg-popover .jb-bg-pop-actions button { flex: 1; background: #07090f; border: 1px solid #475569; color: #e7eaf6; padding: 6px; font-size: 11px; border-radius: 4px; cursor: pointer; }',
+    '#jb-bg-popover .jb-bg-pop-actions button.primary { background: #f59e0b; color: #0a0e1a; border-color: #f59e0b; font-weight: 700; }',
+    '#jb-bg-popover .jb-bg-pop-actions button:hover { background: #1e293b; }',
+    '#jb-bg-popover .jb-bg-pop-actions button.primary:hover { background: #fbbf24; }',
+    '#jb-bg-banner { position: fixed; top: 56px; left: 50%; transform: translateX(-50%); background: #fbbf24; color: #0a0e1a; padding: 8px 16px; border-radius: 999px; font-size: 12px; font-weight: 700; z-index: 99650; box-shadow: 0 4px 12px rgba(0,0,0,0.3); }',
     /* Toast */
     '#jb-toast { position: fixed; bottom: 20px; right: 20px; background: #10b981; color: white; padding: 12px 20px; border-radius: 8px; font-family: sans-serif; font-size: 13px; font-weight: 600; z-index: 99997; box-shadow: 0 4px 24px rgba(0,0,0,0.4); opacity: 0; transform: translateY(10px); transition: all 0.2s; }',
     '#jb-toast.show { opacity: 1; transform: translateY(0); }',
@@ -944,6 +968,7 @@ reveals.forEach(r => io.observe(r));
     '<span class="jb-brand">JR EDITOR</span>',
     '<button id="jb-help" title="What can I edit?">?</button>',
     '<button id="jb-logo" title="Drop a logo to rebrand the site">Logo</button>',
+    '<button id="jb-bg" title="Click any colored section to change its background">BG</button>',
     '<button id="jb-style" title="Colors + fonts">Style</button>',
     '<button id="jb-sections" title="Show/hide sections">Sections</button>',
     '<span class="jb-spacer"></span>',
@@ -980,6 +1005,162 @@ reveals.forEach(r => io.observe(r));
       el.addEventListener('blur', function () { status('changes pending -- press Save to push live'); });
     });
   }
+
+  // ====================================================================
+  // ---------- BG MODE (v3.2) ------------------------------------------
+  // ====================================================================
+  // Click the "BG" button in toolbar to enter background-picker mode.
+  // Cursor becomes a crosshair. Hover any element with a non-transparent
+  // background and it gets a yellow outline. Click → small color picker
+  // popover opens anchored to that element. Pick a color → applied as
+  // inline `background-color` style. Escape or BG button again exits.
+  //
+  // Why walk UP the DOM: when user clicks a small element (a button label,
+  // a paragraph) inside a colored section, they probably mean "change the
+  // section's background" not "set a background-color on this paragraph."
+  // We walk up to the nearest ancestor with a non-transparent computed
+  // background-color and operate on THAT.
+  //
+  // Gradients: if the target uses background-image (gradient), our solid
+  // color-color override won't visually replace it -- need to also wipe
+  // background-image to a "none" override. We do that for the user.
+  // ====================================================================
+
+  var bgModeActive = false;
+  var bgHoverEl = null;
+  var bgBanner = null;
+  var bgPopover = null;
+
+  function findBgTarget(el) {
+    // Walk up from el to the first ancestor with a non-transparent computed
+    // background-color OR a background-image.
+    while (el && el !== document.body) {
+      if (el.closest && el.closest('#jb-toolbar, #jb-modal, #jb-toast, .jb-drawer, #jb-elem-panel, #jb-bg-popover, #jb-bg-banner')) return null;
+      var cs = getComputedStyle(el);
+      var bg = cs.backgroundColor;
+      var img = cs.backgroundImage;
+      var hasBg = bg && bg !== 'rgba(0, 0, 0, 0)' && bg !== 'transparent';
+      var hasGrad = img && img !== 'none';
+      if (hasBg || hasGrad) return el;
+      el = el.parentElement;
+    }
+    return el === document.body ? document.body : null;
+  }
+
+  function describeEl(el) {
+    var tag = el.tagName.toLowerCase();
+    var cls = el.className && typeof el.className === 'string' ? '.' + el.className.split(' ').filter(Boolean).slice(0, 2).join('.') : '';
+    return '<' + tag + '>' + cls;
+  }
+
+  function bgHoverHandler(e) {
+    if (!bgModeActive) return;
+    var t = findBgTarget(e.target);
+    if (bgHoverEl && bgHoverEl !== t) bgHoverEl.removeAttribute('data-jb-bg-hover');
+    if (t) { t.setAttribute('data-jb-bg-hover', ''); bgHoverEl = t; }
+  }
+  function bgClickHandler(e) {
+    if (!bgModeActive) return;
+    var t = findBgTarget(e.target);
+    if (!t) return;
+    e.preventDefault(); e.stopPropagation();
+    openBgPopover(t, e.clientX, e.clientY);
+  }
+  function bgKeyHandler(e) { if (bgModeActive && e.key === 'Escape') exitBgMode(); }
+
+  function enterBgMode() {
+    if (bgModeActive) { exitBgMode(); return; }
+    // Close any open per-element panel so its events don't conflict
+    closeElementPanel();
+    bgModeActive = true;
+    document.body.classList.add('jb-bg-mode');
+    document.getElementById('jb-bg').classList.add('active');
+    // Show banner
+    bgBanner = document.createElement('div');
+    bgBanner.id = 'jb-bg-banner';
+    bgBanner.textContent = 'BG mode -- click any colored area to recolor. Press Esc to exit.';
+    document.body.appendChild(bgBanner);
+    document.body.addEventListener('mousemove', bgHoverHandler, true);
+    document.body.addEventListener('click', bgClickHandler, true);
+    document.addEventListener('keydown', bgKeyHandler, true);
+    status('BG mode active -- click any colored area');
+  }
+  function exitBgMode() {
+    bgModeActive = false;
+    document.body.classList.remove('jb-bg-mode');
+    document.getElementById('jb-bg').classList.remove('active');
+    if (bgHoverEl) { bgHoverEl.removeAttribute('data-jb-bg-hover'); bgHoverEl = null; }
+    if (bgBanner) { bgBanner.parentNode.removeChild(bgBanner); bgBanner = null; }
+    closeBgPopover();
+    document.body.removeEventListener('mousemove', bgHoverHandler, true);
+    document.body.removeEventListener('click', bgClickHandler, true);
+    document.removeEventListener('keydown', bgKeyHandler, true);
+    status('click text, image, or trash icon');
+  }
+  function closeBgPopover() {
+    if (bgPopover) { try { bgPopover.parentNode.removeChild(bgPopover); } catch (e) {} bgPopover = null; }
+  }
+  function openBgPopover(targetEl, x, y) {
+    closeBgPopover();
+    var cs = getComputedStyle(targetEl);
+    var currentRgb = cs.backgroundColor;
+    var currentHex = rgbToHex(currentRgb);
+    var hasGrad = cs.backgroundImage && cs.backgroundImage !== 'none';
+
+    bgPopover = document.createElement('div');
+    bgPopover.id = 'jb-bg-popover';
+    bgPopover.innerHTML = [
+      '<div class="jb-bg-pop-head">Background color</div>',
+      '<div class="jb-bg-pop-tag">' + describeEl(targetEl) + (hasGrad ? ' (gradient detected)' : '') + '</div>',
+      '<div class="jb-bg-pop-row">',
+      '  <input type="color" id="jb-bg-color" value="' + currentHex + '" />',
+      '  <input type="text" id="jb-bg-hex" value="' + currentHex + '" />',
+      '</div>',
+      (hasGrad ? '<label style="display:flex;align-items:center;gap:6px;font-size:11px;color:#94a3b8;margin-top:6px"><input type="checkbox" id="jb-bg-killgrad" checked /> Remove the existing gradient</label>' : ''),
+      '<div class="jb-bg-pop-actions">',
+      '  <button id="jb-bg-clear">Clear override</button>',
+      '  <button id="jb-bg-cancel">Cancel</button>',
+      '  <button id="jb-bg-apply" class="primary">Apply</button>',
+      '</div>'
+    ].join('');
+    document.body.appendChild(bgPopover);
+    // Position near click, but keep inside viewport
+    var rect = bgPopover.getBoundingClientRect();
+    var px = Math.min(x + 12, window.innerWidth - rect.width - 12);
+    var py = Math.min(y + 12, window.innerHeight - rect.height - 12);
+    bgPopover.style.left = (px + window.scrollX) + 'px';
+    bgPopover.style.top  = (py + window.scrollY) + 'px';
+
+    var colorIn = document.getElementById('jb-bg-color');
+    var hexIn = document.getElementById('jb-bg-hex');
+    var killGrad = document.getElementById('jb-bg-killgrad');
+    colorIn.addEventListener('input', function () {
+      hexIn.value = colorIn.value;
+      targetEl.style.backgroundColor = colorIn.value;
+      if (killGrad && killGrad.checked) targetEl.style.backgroundImage = 'none';
+    });
+    hexIn.addEventListener('change', function () {
+      var v = hexIn.value.trim();
+      if (/^#[0-9a-fA-F]{3,8}$/.test(v)) {
+        targetEl.style.backgroundColor = v;
+        colorIn.value = v.length === 7 ? v : colorIn.value;
+        if (killGrad && killGrad.checked) targetEl.style.backgroundImage = 'none';
+      }
+    });
+    document.getElementById('jb-bg-clear').onclick = function () {
+      targetEl.style.backgroundColor = '';
+      targetEl.style.backgroundImage = '';
+      closeBgPopover();
+      status('background override cleared -- press Save');
+    };
+    document.getElementById('jb-bg-cancel').onclick = closeBgPopover;
+    document.getElementById('jb-bg-apply').onclick = function () {
+      closeBgPopover();
+      toast('Background updated. Press Save to push it live.');
+      status('background changed -- press Save');
+    };
+  }
+  // ---------- end BG mode -----------------------------------------------
 
   // ====================================================================
   // ---------- drop-logo-to-rebrand (v3.1) -----------------------------
@@ -1853,9 +2034,11 @@ reveals.forEach(r => io.observe(r));
   function serializeForSave() {
     var clone = document.documentElement.cloneNode(true);
     // Remove injected editor elements
-    ['jb-toolbar', 'jb-modal', 'jb-toast', 'jb-elem-panel'].forEach(function (id) { var el = clone.querySelector('#' + id); if (el) el.parentNode.removeChild(el); });
+    ['jb-toolbar', 'jb-modal', 'jb-toast', 'jb-elem-panel', 'jb-bg-popover', 'jb-bg-banner'].forEach(function (id) { var el = clone.querySelector('#' + id); if (el) el.parentNode.removeChild(el); });
     clone.querySelectorAll('.jb-drawer').forEach(function (el) { el.parentNode.removeChild(el); });
     clone.querySelectorAll('.jb-del-btn').forEach(function (el) { el.parentNode.removeChild(el); });
+    // Strip BG-mode hover markers
+    clone.querySelectorAll('[data-jb-bg-hover]').forEach(function (el) { el.removeAttribute('data-jb-bg-hover'); });
     // Remove our injected style block
     clone.querySelectorAll('style').forEach(function (s) { if (/#jb-toolbar/.test(s.textContent)) s.parentNode.removeChild(s); });
     // Strip edit-mode attributes
@@ -1984,7 +2167,8 @@ reveals.forEach(r => io.observe(r));
       '  <h3>Visual editor cheatsheet (v3.1)</h3>',
       '  <p><strong>Edit text:</strong> click any heading, paragraph, link, or list item. Type. Click away.</p>',
       '  <p><strong>Per-element styling:</strong> click any text element to open a panel with font / size / weight / spacing / color / align controls for JUST that element.</p>',
-      '  <p><strong>Drop a logo (new):</strong> click <em>Logo</em> in toolbar. Drop the company\'s logo file -- the site adopts its colors and the logo gets placed in header + footer with its background visually dropped so it flows with the page (never a foreign sticker).</p>',
+      '  <p><strong>Drop a logo:</strong> click <em>Logo</em> in toolbar. Drop the company\'s logo file -- the site adopts its colors and the logo gets placed in header + footer with its background visually dropped so it flows with the page (never a foreign sticker).</p>',
+      '  <p><strong>BG mode (new):</strong> click <em>BG</em> in toolbar to enter background-picker mode. Hover any colored area to see a yellow outline, click to open a color picker just for that band. Press Esc to exit. Lets you fix the orange/brown/cream bands separately instead of touching every site var at once.</p>',
       '  <p><strong>Swap image:</strong> click any image. Big "Tap to pick a photo" opens your camera roll on phone, or paste a URL via the small toggle below.</p>',
       '  <p><strong>Delete/hide:</strong> hover any card, section, or element. Click the red X to hide it. Click X again to restore.</p>',
       '  <p><strong>Style drawer:</strong> click <em>Style</em>. Adjust every site color, pick a whole-site font pairing, OR use the <em>Numbers font</em> picker to fix ugly stat displays without touching the rest.</p>',
@@ -2009,6 +2193,7 @@ reveals.forEach(r => io.observe(r));
     document.getElementById('jb-style').onclick = openStyleDrawer;
     document.getElementById('jb-sections').onclick = openSectionDrawer;
     document.getElementById('jb-logo').onclick = openLogoModal;
+    document.getElementById('jb-bg').onclick = enterBgMode;
     status(getStoredToken() ? 'click text, image, or trash icon' : 'click anything to edit -- token prompt appears on first Save');
   }
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init);
