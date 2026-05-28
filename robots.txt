@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://old-mill-tavern-sheridan.vercel.app/sitemap.xml
